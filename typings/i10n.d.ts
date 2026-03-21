@@ -3,10 +3,23 @@
 /* eslint-disable */
 // @ts-nocheck
 export type FluentMessageId =
-  | 'pref-enable'
-  | 'pref-help'
-  | 'pref-input'
+  | 'dialog-close'
+  | 'dialog-title'
+  | 'error-extract-failed'
+  | 'error-no-api-key'
+  | 'error-no-item-selected'
+  | 'error-no-pdf'
+  | 'error-translate-failed'
+  | 'menu-translate'
+  | 'pref-api-base-url-label'
+  | 'pref-api-key-label'
+  | 'pref-api-model-label'
+  | 'pref-base-url-hint'
+  | 'pref-target-language-label'
   | 'pref-title'
   | 'prefs-title'
+  | 'progress-done'
+  | 'progress-extracting'
+  | 'progress-translating'
   | 'startup-begin'
   | 'startup-finish';

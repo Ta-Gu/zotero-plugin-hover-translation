@@ -5,29 +5,44 @@
   onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
 >
   <label><html:h2 data-l10n-id="pref-title"></html:h2></label>
-  <checkbox
-    id="zotero-prefpane-__addonRef__-enable"
-    preference="enable"
-    data-l10n-id="pref-enable"
-  />
-  <hbox>
-    <html:label
-      for="zotero-prefpane-__addonRef__-input"
-      data-l10n-id="pref-input"
-    ></html:label>
+
+  <hbox align="center" style="margin: 6px 0;">
+    <label value="API Key" style="min-width: 130px;" />
+    <html:input
+      type="password"
+      id="zotero-prefpane-__addonRef__-api-key"
+      style="flex: 1; min-width: 280px;"
+    />
+  </hbox>
+
+  <hbox align="center" style="margin: 6px 0;">
+    <label value="API Base URL" style="min-width: 130px;" />
     <html:input
       type="text"
-      id="zotero-prefpane-__addonRef__-input"
-      preference="input"
-    ></html:input>
+      id="zotero-prefpane-__addonRef__-api-base-url"
+      style="flex: 1; min-width: 280px;"
+    />
   </hbox>
-  <hbox class="virtualized-table-container" flex="1" height="300px">
-    <html:div id="__addonRef__-table-container" />
+
+  <hbox align="center" style="margin: 6px 0;">
+    <label value="Model" style="min-width: 130px;" />
+    <html:input
+      type="text"
+      id="zotero-prefpane-__addonRef__-api-model"
+      style="flex: 1; min-width: 280px;"
+    />
   </hbox>
+
+  <hbox align="center" style="margin: 6px 0;">
+    <label value="Target Language" style="min-width: 130px;" />
+    <html:input
+      type="text"
+      id="zotero-prefpane-__addonRef__-target-language"
+      style="flex: 1; min-width: 280px;"
+    />
+  </hbox>
+
+  <description style="margin-top: 10px; color: #888; font-size: small;">
+    Base URL: https://api.openai.com/v1 (OpenAI) · https://api.deepseek.com/v1 (DeepSeek) · http://localhost:11434/v1 (Ollama)
+  </description>
 </groupbox>
-<vbox>
-  <html:label
-    data-l10n-id="pref-help"
-    data-l10n-args='{"time": "__buildTime__","name": "__addonName__","version":"__buildVersion__"}'
-  ></html:label>
-</vbox>
