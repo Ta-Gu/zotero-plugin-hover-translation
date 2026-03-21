@@ -11,6 +11,8 @@ import {
   getPDFAttachment,
   splitIntoParagraphs,
 } from "./modules/pdfExtract";
+import { extractPageSentencesViaIframe, SentenceInfo } from "./modules/sentences";
+import { injectPageOverlay, clearAllOverlays } from "./modules/overlay";
 
 async function onStartup() {
   await Promise.all([
@@ -42,13 +44,63 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
     `${addon.data.config.addonRef}-mainWindow.ftl`,
   );
 
-  // Register right-click menu item on library items
+  // Register right-click menu items on library items
   ztoolkit.Menu.register("item", {
     tag: "menuitem",
     id: `zotero-itemmenu-${config.addonRef}-translate`,
     label: getString("menu-translate"),
     commandListener: () => addon.hooks.onMenuEvent("translatePDF"),
   });
+
+  ztoolkit.Menu.register("item", {
+    tag: "menuitem",
+    id: `zotero-itemmenu-${config.addonRef}-prepare`,
+    label: getString("menu-prepare"),
+    commandListener: () => addon.hooks.onMenuEvent("prepareOverlay"),
+  });
+
+  // Register the "Prepare Translations" toolbar button in PDF readers
+  (Zotero.Reader as any).registerEventListener(
+    "renderToolbar",
+    (event: any) => {
+      const reader = event.reader;
+      const doc: Document | undefined =
+        event.doc ?? reader?._iframeWindow?.document;
+      if (!doc) return;
+
+      const btn = doc.createElement("button");
+      btn.id = `ht-toolbar-btn-${reader._item?.id ?? "unknown"}`;
+      btn.title = getString("toolbar-prepare");
+      btn.textContent = "⚡";
+      btn.style.cssText =
+        "cursor:pointer; font-size:16px; padding:2px 6px; border:none; background:transparent;";
+
+      btn.addEventListener("click", () => {
+        try {
+          addon.hooks.onReaderToolbarClick(reader).catch((e: unknown) => {
+            const msg = e instanceof Error ? e.message : String(e);
+            ztoolkit.log("Toolbar button async error:", e);
+            showError(msg);
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          ztoolkit.log("Toolbar button sync error:", e);
+          showError(msg);
+        }
+      });
+
+      if (typeof event.append === "function") {
+        event.append(btn);
+      } else {
+        // Fallback: append to the toolbar directly
+        const toolbar =
+          doc.querySelector(".toolbar") ??
+          doc.querySelector("#toolbarViewer");
+        toolbar?.appendChild(btn);
+      }
+    },
+    config.addonID,
+  );
 
   new ztoolkit.ProgressWindow(addon.data.config.addonName, {
     closeOnClick: true,
@@ -129,11 +181,216 @@ function onShortcuts(_type: string) {}
 async function onMenuEvent(type: string) {
   if (type === "translatePDF") {
     await runTranslatePDF();
+  } else if (type === "prepareOverlay") {
+    await runPrepareOverlayFromMenu();
   }
 }
 
+/**
+ * Triggered from the right-click item menu.
+ * Finds the PDF attachment for the selected item, locates the open reader
+ * for that attachment, and runs the hover-overlay preparation pipeline.
+ */
+async function runPrepareOverlayFromMenu(): Promise<void> {
+  const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
+  if (!selectedItems.length) {
+    showError(getString("error-no-item-selected"));
+    return;
+  }
+
+  const pdfItem = getPDFAttachment(selectedItems[0]);
+  if (!pdfItem) {
+    showError(getString("error-no-pdf"));
+    return;
+  }
+
+  // Find an open reader whose attachment matches the PDF item
+  const readers = (Zotero.Reader as any)._readers as any[] | undefined;
+  ztoolkit.log("open readers:", readers?.length, readers?.map((r: any) => r._item?.id));
+
+  const reader = readers?.find(
+    (r: any) => r._item?.id === pdfItem.id,
+  );
+
+  if (!reader) {
+    showError(getString("error-reader-not-open"));
+    return;
+  }
+
+  await runPrepareTranslations(reader);
+}
+
+/**
+ * Handle clicks on the "Prepare Translations" toolbar button inside a reader.
+ *
+ * @param reader - The Zotero Reader instance whose toolbar was clicked
+ */
+async function onReaderToolbarClick(reader: any): Promise<void> {
+  await runPrepareTranslations(reader);
+}
+
 // ---------------------------------------------------------------------------
-// Translation pipeline
+// Hover overlay pipeline (Milestone 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Main pipeline for preparing hover translations on a PDF open in the reader.
+ *
+ * Steps:
+ *  1. Validate API config and retrieve the pdf.js window
+ *  2. Get the full pdf.js PDFDocument
+ *  3. For each page (prioritising the currently visible page):
+ *     a. Extract sentences with bounding boxes
+ *     b. Translate sentences via the API
+ *     c. Inject the overlay so hovering shows translations immediately
+ */
+async function runPrepareTranslations(reader: any): Promise<void> {
+  ztoolkit.log("runPrepareTranslations called, reader:", reader);
+
+  const apiConfig = getTranslationConfig();
+  if (!apiConfig.apiKey) {
+    showError(getString("error-no-api-key"));
+    return;
+  }
+
+  // Show the progress window immediately so the user gets feedback
+  const progress = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
+    closeOnClick: false,
+    closeTime: -1,
+  })
+    .createLine({
+      text: getString("progress-preparing"),
+      type: "default",
+      progress: 5,
+    })
+    .show();
+
+  // --- Retrieve the pdf.js application from the reader ---
+  // Try several internal paths across Zotero versions
+  const iframeWin: Window | undefined =
+    reader._internalReader?._primaryView?._iframeWindow ??
+    reader._primaryView?._iframeWindow ??
+    (reader._iframeWindow as Window | undefined);
+
+  ztoolkit.log("iframeWin:", iframeWin);
+
+  if (!iframeWin) {
+    progress.changeLine({
+      text: getString("error-reader-not-ready"),
+      type: "fail",
+      progress: 0,
+    });
+    progress.startCloseTimer(4000);
+    return;
+  }
+
+  const pdfApp = (iframeWin as any).PDFViewerApplication;
+  ztoolkit.log("PDFViewerApplication:", pdfApp, "pdfDocument:", pdfApp?.pdfDocument);
+
+  if (!pdfApp?.pdfDocument) {
+    progress.changeLine({
+      text: getString("error-reader-not-ready"),
+      type: "fail",
+      progress: 0,
+    });
+    progress.startCloseTimer(4000);
+    return;
+  }
+
+  const pdfDoc = pdfApp.pdfDocument;
+  const totalPages: number = pdfDoc.numPages; // 1-based count
+  const currentPage: number = pdfApp.page ?? 1; // 1-based
+
+  ztoolkit.log("totalPages:", totalPages, "currentPage:", currentPage);
+
+  // Clear any existing overlays before starting fresh
+  clearAllOverlays(iframeWin);
+
+  // Only process the current page and the next 2 pages to control API costs.
+  // The user can trigger again after scrolling to process more pages.
+  const PAGES_PER_RUN = 3;
+  const pageOrder = buildPageOrder(currentPage - 1, totalPages).slice(0, PAGES_PER_RUN);
+
+  for (let i = 0; i < pageOrder.length; i++) {
+    const pageIndex = pageOrder[i]; // 0-based
+    const pctDone = Math.round(((i + 1) / pageOrder.length) * 90) + 5;
+
+    progress.changeLine({
+      text: `${getString("progress-preparing")} (${i + 1}/${pageOrder.length})`,
+      type: "default",
+      progress: pctDone,
+    });
+
+    try {
+      // Use iframe injection so pdf.js APIs are called in their native context
+      const sentences = await extractPageSentencesViaIframe(iframeWin, pageIndex);
+      ztoolkit.log(`Page ${pageIndex + 1}: ${sentences.length} sentences found`);
+      if (sentences.length === 0) continue;
+
+      const translations = await translateSentences(sentences, apiConfig);
+
+      const entries = sentences.map((s, idx) => ({
+        sentence: s,
+        translation: translations[idx] ?? "",
+      }));
+
+      injectPageOverlay(iframeWin, pageIndex, entries);
+      ztoolkit.log(`Page ${pageIndex + 1}: overlay injected for ${entries.length} sentences`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      ztoolkit.log(`Page ${pageIndex + 1} failed:`, msg);
+      // Continue with remaining pages rather than aborting
+    }
+  }
+
+  progress.changeLine({
+    text: getString("progress-overlay-ready"),
+    type: "success",
+    progress: 100,
+  });
+  progress.startCloseTimer(3000);
+}
+
+/**
+ * Inject a script into the pdf.js iframe to report the real DOM structure of
+/**
+ * Translate an array of sentences using individual API calls.
+ * Returns translations in the same order as the input sentences.
+ */
+async function translateSentences(
+  sentences: SentenceInfo[],
+  apiConfig: ReturnType<typeof getTranslationConfig>,
+): Promise<string[]> {
+  const results: string[] = new Array(sentences.length).fill("");
+  for (let i = 0; i < sentences.length; i++) {
+    try {
+      results[i] = await translateText(sentences[i].text, apiConfig);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      ztoolkit.log(`Sentence translation failed (${i}):`, msg);
+      results[i] = `(${getString("error-translate-failed")})`;
+    }
+  }
+  return results;
+}
+
+/**
+ * Build the order in which to process pages, starting at `startIndex`
+ * and wrapping around to cover all pages.
+ *
+ * @param startIndex - 0-based page index to start from
+ * @param totalPages - Total number of pages (1-based count)
+ */
+function buildPageOrder(startIndex: number, totalPages: number): number[] {
+  const order: number[] = [];
+  for (let i = 0; i < totalPages; i++) {
+    order.push((startIndex + i) % totalPages);
+  }
+  return order;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy pipeline: right-click menu translation (Milestone 2, kept for reference)
 // ---------------------------------------------------------------------------
 
 /**
@@ -187,7 +444,7 @@ async function runTranslatePDF() {
     return;
   }
 
-  // Limit to first 10 paragraphs for the Milestone 2 demo
+  // Limit to first 10 paragraphs for the demo
   const paragraphs = splitIntoParagraphs(rawText).slice(0, 10);
 
   // --- 3. Translate paragraph by paragraph ---
@@ -287,4 +544,5 @@ export default {
   onPrefsEvent,
   onShortcuts,
   onMenuEvent,
+  onReaderToolbarClick,
 };

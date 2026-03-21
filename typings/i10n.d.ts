@@ -9,7 +9,10 @@ export type FluentMessageId =
   | 'error-no-api-key'
   | 'error-no-item-selected'
   | 'error-no-pdf'
+  | 'error-reader-not-open'
+  | 'error-reader-not-ready'
   | 'error-translate-failed'
+  | 'menu-prepare'
   | 'menu-translate'
   | 'pref-api-base-url-label'
   | 'pref-api-key-label'
@@ -20,6 +23,9 @@ export type FluentMessageId =
   | 'prefs-title'
   | 'progress-done'
   | 'progress-extracting'
+  | 'progress-overlay-ready'
+  | 'progress-preparing'
   | 'progress-translating'
   | 'startup-begin'
-  | 'startup-finish';
+  | 'startup-finish'
+  | 'toolbar-prepare';
