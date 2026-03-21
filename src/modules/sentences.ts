@@ -200,7 +200,11 @@ function groupIntoLines(items: ProjectedItem[]): Line[] {
 
 /**
  * Merge consecutive lines into paragraph blocks.
- * A gap larger than 1.5× the line height signals a block boundary.
+ * A block boundary is signalled by:
+ *  - A vertical gap > 1.5× the previous line height, OR
+ *  - A significant font-size change between lines (e.g. heading → body), OR
+ *  - The current or previous line looks like a section heading
+ *    (first item starts with a hierarchical number such as "2.3" or "2.3.1").
  */
 function groupIntoBlocks(lines: Line[]): Line[][] {
   if (lines.length === 0) return [];
@@ -213,10 +217,9 @@ function groupIntoBlocks(lines: Line[]): Line[][] {
     const prevH = prev.bottom - prev.top || 10;
     const currH = curr.bottom - curr.top || 10;
     const gap = curr.top - prev.bottom;
-    // New block when: large vertical gap, OR font size changes significantly
-    // (e.g. section heading followed by body text)
     const sizeRatio = Math.max(prevH, currH) / Math.min(prevH, currH);
-    if (gap > prevH * 1.5 || sizeRatio > 1.3) {
+    const splitOnHeading = isLikelyHeadingLine(curr) || isLikelyHeadingLine(prev);
+    if (gap > prevH * 1.5 || sizeRatio > 1.3 || splitOnHeading) {
       blocks.push(current);
       current = [curr];
     } else {
@@ -225,6 +228,16 @@ function groupIntoBlocks(lines: Line[]): Line[][] {
   }
   blocks.push(current);
   return blocks;
+}
+
+/**
+ * Return true if the line looks like a section heading.
+ * Detection heuristic: the first text item starts with a hierarchical
+ * section number (e.g. "2.3", "2.3.1", "A.1").
+ */
+function isLikelyHeadingLine(line: Line): boolean {
+  const firstStr = (line.items[0]?.str ?? "").trimStart();
+  return /^\d+\.\d+/.test(firstStr);
 }
 
 /**

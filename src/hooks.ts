@@ -76,17 +76,17 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
         "cursor:pointer; font-size:16px; padding:2px 6px; border:none; background:transparent;";
 
       btn.addEventListener("click", () => {
-        try {
-          addon.hooks.onReaderToolbarClick(reader).catch((e: unknown) => {
-            const msg = e instanceof Error ? e.message : String(e);
-            ztoolkit.log("Toolbar button async error:", e);
-            showError(msg);
-          });
-        } catch (e) {
+        // Resolve the reader via _readers (same path as the working right-click
+        // menu) so we always get the fully-initialised reader object.
+        const pdfItemId = reader?._item?.id;
+        const readers = (Zotero.Reader as any)._readers as any[] | undefined;
+        const resolvedReader =
+          readers?.find((r: any) => r._item?.id === pdfItemId) ?? reader;
+        runPrepareTranslations(resolvedReader).catch((e: unknown) => {
           const msg = e instanceof Error ? e.message : String(e);
-          ztoolkit.log("Toolbar button sync error:", e);
+          ztoolkit.log("Toolbar button error:", e);
           showError(msg);
-        }
+        });
       });
 
       if (typeof event.append === "function") {
