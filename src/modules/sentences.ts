@@ -232,17 +232,57 @@ function groupIntoBlocks(lines: Line[]): Line[][] {
 
 /**
  * Return true if the line looks like a section heading.
- * Detection heuristic: the first text item starts with a hierarchical
- * section number (e.g. "2.3", "2.3.1", "A.1").
+ * Covers numbered sections, all-caps titles, Roman numerals, and short
+ * unpunctuated lines that are unlikely to be mid-paragraph fragments.
  */
 function isLikelyHeadingLine(line: Line): boolean {
   const firstStr = (line.items[0]?.str ?? "").trimStart();
-  return /^\d+\.\d+/.test(firstStr);
+  const fullStr = line.items.map((i) => i.str).join("").trim();
+
+  // "2.3 …", "2.3.1 …", "A.1 …"
+  if (/^\d+\.\d+|^[A-Z]\.\d+/.test(firstStr)) return true;
+
+  // "3 Results", "1 Introduction"
+  if (/^\d+\s+[A-Z]/.test(firstStr)) return true;
+
+  // Roman numeral heading: "I. Intro", "II. Background"
+  if (/^(?:I{1,3}|IV|V?I{0,3}|IX|X{1,2}I{0,3})\.\s+[A-Z]/i.test(firstStr)) return true;
+
+  // All-caps short line: "ABSTRACT", "INTRODUCTION", "RELATED WORK"
+  if (fullStr.length <= 50 && /^[A-Z][A-Z\s\-]{2,}$/.test(fullStr)) return true;
+
+  // Short line (≤ 60 chars), starts uppercase, no trailing sentence punctuation,
+  // and has very few items — characteristic of a heading in academic PDFs.
+  if (
+    fullStr.length > 0 &&
+    fullStr.length <= 60 &&
+    line.items.length <= 4 &&
+    /^[A-Z]/.test(fullStr) &&
+    !/[.!?:,;]$/.test(fullStr)
+  ) return true;
+
+  return false;
 }
+
+/** Common abbreviations that should not be treated as sentence endings. */
+const ABBREVS = new Set([
+  "Dr", "Mr", "Mrs", "Ms", "Prof", "Sr", "Jr", "St", "Mt", "Rd", "Ave",
+  "Fig", "Figs", "Eq", "Eqs", "Tab", "Ref", "Refs", "Sec", "Secs", "Ch",
+  "Vol", "No", "pp", "p", "et", "al", "vs", "approx", "dept", "est", "etc",
+  "govt", "max", "min", "avg", "std", "var", "Def", "Prop", "Thm", "Cor",
+  "Lem", "Alg", "App", "Univ", "Dept", "Inc", "Ltd", "Corp", "Co",
+  "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  "e.g", "i.e", "cf", "resp", "approx", "etal",
+]);
 
 /**
  * Split a block into sentences using punctuation detection, then compute
  * percentage-based bounding boxes for each sentence.
+ *
+ * Each PDF text item (token) is assigned to exactly one sentence based on
+ * which sentence range contains the midpoint of the token in the full text.
+ * This prevents items from appearing in two adjacent sentences at once,
+ * which used to cause highlight bleed across sentence boundaries.
  */
 function splitBlockIntoSentences(
   block: Line[],
@@ -250,39 +290,49 @@ function splitBlockIntoSentences(
   vpWidth: number,
   vpHeight: number,
 ): SentenceInfo[] {
-  interface Token { str: string; item: ProjectedItem }
+  interface Token { str: string; item: ProjectedItem; start: number }
   const tokens: Token[] = [];
+  let charPos = 0;
 
   for (const line of block) {
     for (const item of line.items) {
-      tokens.push({ str: item.str, item });
+      tokens.push({ str: item.str, item, start: charPos });
+      charPos += item.str.length;
     }
     // Ensure words from adjacent lines don't run together
     const last = tokens[tokens.length - 1];
     if (last && !last.str.endsWith(" ")) {
       tokens[tokens.length - 1] = { ...last, str: last.str + " " };
+      charPos += 1; // account for the appended space
     }
   }
 
   if (tokens.length === 0) return [];
 
-  // Build full text and character→token mapping
-  let fullText = "";
-  const charToToken: number[] = [];
-  for (let ti = 0; ti < tokens.length; ti++) {
-    for (const ch of tokens[ti].str) {
-      fullText += ch;
-      charToToken.push(ti);
-    }
-  }
+  const fullText = tokens.map((t) => t.str).join("");
 
-  // Detect sentence boundaries: .!? followed by space + uppercase
-  const sentenceEnds: number[] = [];
+  // Detect candidate sentence boundaries: .!? followed by whitespace + uppercase
+  const rawEnds: number[] = [];
   const endPattern = /[.!?][)\]"']?\s+[A-Z]/g;
   let m: RegExpExecArray | null;
   while ((m = endPattern.exec(fullText)) !== null) {
-    sentenceEnds.push(m.index + 1);
+    rawEnds.push(m.index + 1); // position just after the punctuation
   }
+
+  // Filter out false positives from common abbreviations and single letters
+  const sentenceEnds = rawEnds.filter((pos) => {
+    // The word immediately before the punctuation
+    const before = fullText.slice(0, pos - 1);
+    const wordMatch = before.match(/(\S+)$/);
+    const prevWord = wordMatch ? wordMatch[1] : "";
+    // Single uppercase letter → likely "A. Smith" style abbreviation
+    if (/^[A-Z]$/.test(prevWord)) return false;
+    // Pure number → list item "1. First item"
+    if (/^\d+$/.test(prevWord)) return false;
+    // Known abbreviation
+    if (ABBREVS.has(prevWord) || ABBREVS.has(prevWord.replace(/\.$/, ""))) return false;
+    return true;
+  });
 
   // Build sentence ranges
   const ranges: Array<{ start: number; end: number }> = [];
@@ -298,12 +348,17 @@ function splitBlockIntoSentences(
     const text = fullText.slice(range.start, range.end).trim();
     if (text.length < 10) continue;
 
-    const tokenSet = new Set<number>();
-    for (let ci = range.start; ci < range.end; ci++) {
-      if (charToToken[ci] !== undefined) tokenSet.add(charToToken[ci]);
+    // Assign each token to this sentence using the token's midpoint character
+    // position. This ensures every token belongs to exactly one sentence and
+    // prevents highlight bleed at sentence boundaries.
+    const sentenceItems: ProjectedItem[] = [];
+    for (const tok of tokens) {
+      const mid = tok.start + tok.str.length / 2;
+      if (mid >= range.start && mid < range.end) {
+        sentenceItems.push(tok.item);
+      }
     }
 
-    const sentenceItems = [...tokenSet].map((ti) => tokens[ti].item);
     const rect = mergedRectPct(sentenceItems, vpWidth, vpHeight);
     if (!rect) continue;
 

@@ -13,6 +13,7 @@ import {
 } from "./modules/pdfExtract";
 import { extractPageSentencesViaIframe, SentenceInfo } from "./modules/sentences";
 import { injectPageOverlay, clearAllOverlays } from "./modules/overlay";
+import { initCache, getCachedPage, setCachedPage } from "./modules/cache";
 
 async function onStartup() {
   await Promise.all([
@@ -22,6 +23,7 @@ async function onStartup() {
   ]);
 
   initLocale();
+  await initCache();
 
   await Zotero.PreferencePanes.register({
     pluginID: config.addonID,
@@ -58,22 +60,6 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
     label: getString("menu-prepare"),
     commandListener: () => addon.hooks.onMenuEvent("prepareOverlay"),
   });
-
-  // Add "Prepare Hover Translations" to the right-click context menu inside
-  // the PDF reader. onCommand runs in chrome context so there are no
-  // cross-boundary issues.
-  (Zotero.Reader as any).registerEventListener(
-    "createViewContextMenu",
-    (event: any) => {
-      event.append({
-        label: getString("menu-prepare"),
-        onCommand() {
-          addon.hooks.onMenuEvent("prepareOverlay");
-        },
-      });
-    },
-    config.addonID,
-  );
 
   // Add a chrome toolbar button to zotero-tabs-toolbar (the top bar with the
   // sync button). This lives entirely in the chrome document — no iframe
@@ -309,8 +295,9 @@ async function runPrepareTranslations(reader: any): Promise<void> {
   const pdfDoc = pdfApp.pdfDocument;
   const totalPages: number = pdfDoc.numPages; // 1-based count
   const currentPage: number = pdfApp.page ?? 1; // 1-based
+  const itemId: number = reader._item?.id as number;
 
-  ztoolkit.log("totalPages:", totalPages, "currentPage:", currentPage);
+  ztoolkit.log("totalPages:", totalPages, "currentPage:", currentPage, "itemId:", itemId);
 
   // Clear any existing overlays before starting fresh
   clearAllOverlays(iframeWin);
@@ -323,6 +310,19 @@ async function runPrepareTranslations(reader: any): Promise<void> {
   for (let i = 0; i < pageOrder.length; i++) {
     const pageIndex = pageOrder[i]; // 0-based
     const pctDone = Math.round(((i + 1) / pageOrder.length) * 90) + 5;
+
+    // Check cache first — skip API call if we already have translations
+    const cached = itemId ? getCachedPage(itemId, pageIndex) : null;
+    if (cached) {
+      injectPageOverlay(iframeWin, pageIndex, cached.sentences);
+      ztoolkit.log(`Page ${pageIndex + 1}: loaded from cache (${cached.sentences.length} sentences)`);
+      progress.changeLine({
+        text: `${getString("progress-preparing")} (${i + 1}/${pageOrder.length})`,
+        type: "default",
+        progress: pctDone,
+      });
+      continue;
+    }
 
     progress.changeLine({
       text: `${getString("progress-preparing")} (${i + 1}/${pageOrder.length})`,
@@ -345,6 +345,9 @@ async function runPrepareTranslations(reader: any): Promise<void> {
 
       injectPageOverlay(iframeWin, pageIndex, entries);
       ztoolkit.log(`Page ${pageIndex + 1}: overlay injected for ${entries.length} sentences`);
+
+      // Persist to cache so this page doesn't need re-translating
+      if (itemId) setCachedPage(itemId, pageIndex, entries);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       ztoolkit.log(`Page ${pageIndex + 1} failed:`, msg);
