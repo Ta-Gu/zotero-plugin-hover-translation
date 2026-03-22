@@ -41,4 +41,5 @@ jobs:
     steps:
       - name: Setup JS
         uses: zotero-plugin-dev/workflows/setup-js@main
-      - run: npm run test
+      - name: Run sentence detection tests
+        run: node scripts/test-sentences.mjs

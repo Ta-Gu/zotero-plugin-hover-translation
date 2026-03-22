@@ -17,3 +17,6 @@ tsconfig.tsbuildinfo
 .scaffold
 build
 logs
+
+# Local Zotero source checkout (for type hints only)
+zotero/
