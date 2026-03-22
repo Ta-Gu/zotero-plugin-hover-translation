@@ -59,48 +59,46 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
     commandListener: () => addon.hooks.onMenuEvent("prepareOverlay"),
   });
 
-  // Register the "Prepare Translations" toolbar button in PDF readers
+  // Add "Prepare Hover Translations" to the right-click context menu inside
+  // the PDF reader. onCommand runs in chrome context so there are no
+  // cross-boundary issues.
   (Zotero.Reader as any).registerEventListener(
-    "renderToolbar",
+    "createViewContextMenu",
     (event: any) => {
-      const reader = event.reader;
-      const doc: Document | undefined =
-        event.doc ?? reader?._iframeWindow?.document;
-      if (!doc) return;
-
-      const btn = doc.createElement("button");
-      btn.id = `ht-toolbar-btn-${reader._item?.id ?? "unknown"}`;
-      btn.title = getString("toolbar-prepare");
-      btn.textContent = "⚡";
-      btn.style.cssText =
-        "cursor:pointer; font-size:16px; padding:2px 6px; border:none; background:transparent;";
-
-      btn.addEventListener("click", () => {
-        // Resolve the reader via _readers (same path as the working right-click
-        // menu) so we always get the fully-initialised reader object.
-        const pdfItemId = reader?._item?.id;
-        const readers = (Zotero.Reader as any)._readers as any[] | undefined;
-        const resolvedReader =
-          readers?.find((r: any) => r._item?.id === pdfItemId) ?? reader;
-        runPrepareTranslations(resolvedReader).catch((e: unknown) => {
-          const msg = e instanceof Error ? e.message : String(e);
-          ztoolkit.log("Toolbar button error:", e);
-          showError(msg);
-        });
+      event.append({
+        label: getString("menu-prepare"),
+        onCommand() {
+          addon.hooks.onMenuEvent("prepareOverlay");
+        },
       });
-
-      if (typeof event.append === "function") {
-        event.append(btn);
-      } else {
-        // Fallback: append to the toolbar directly
-        const toolbar =
-          doc.querySelector(".toolbar") ??
-          doc.querySelector("#toolbarViewer");
-        toolbar?.appendChild(btn);
-      }
     },
     config.addonID,
   );
+
+  // Add a chrome toolbar button to zotero-tabs-toolbar (the top bar with the
+  // sync button). This lives entirely in the chrome document — no iframe
+  // boundary — so click handlers work with a normal addEventListener.
+  // Zotero's switchMenuType() automatically shows/hides elements with the
+  // "menu-type-reader pdf" class based on the active tab type, so the button
+  // only appears when a PDF reader tab is selected.
+  const htBtnId = `${config.addonRef}-tabs-btn`;
+  win.document.getElementById(htBtnId)?.remove(); // clean up if re-loading
+
+  const htBtn = (win.document as any).createXULElement("toolbarbutton");
+  htBtn.id = htBtnId;
+  htBtn.setAttribute("label", "⚡ " + getString("toolbar-prepare"));
+  htBtn.setAttribute("tooltiptext", getString("toolbar-prepare"));
+  htBtn.setAttribute("class", "zotero-tb-button menu-type-reader pdf");
+  htBtn.setAttribute("hidden", "true"); // shown by switchMenuType when PDF tab active
+  htBtn.addEventListener("command", () => {
+    addon.hooks.onMenuEvent("prepareOverlay");
+  });
+
+  const tabsToolbar = win.document.getElementById("zotero-tabs-toolbar");
+  const syncError = win.document.getElementById("zotero-tb-sync-error");
+  if (tabsToolbar) {
+    tabsToolbar.insertBefore(htBtn, syncError ?? null);
+  }
 
   new ztoolkit.ProgressWindow(addon.data.config.addonName, {
     closeOnClick: true,
@@ -114,9 +112,10 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
     .show();
 }
 
-async function onMainWindowUnload(_win: Window): Promise<void> {
+async function onMainWindowUnload(win: Window): Promise<void> {
   ztoolkit.unregisterAll();
   addon.data.dialog?.window?.close();
+  win.document.getElementById(`${config.addonRef}-tabs-btn`)?.remove();
 }
 
 function onShutdown(): void {
@@ -179,38 +178,48 @@ function onShortcuts(_type: string) {}
  * Dispatch named menu/command events to the appropriate handler.
  */
 async function onMenuEvent(type: string) {
-  if (type === "translatePDF") {
-    await runTranslatePDF();
-  } else if (type === "prepareOverlay") {
-    await runPrepareOverlayFromMenu();
+  try {
+    if (type === "translatePDF") {
+      await runTranslatePDF();
+    } else if (type === "prepareOverlay") {
+      await runPrepareOverlayFromMenu();
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    ztoolkit.log("onMenuEvent error:", msg);
+    showError(msg);
   }
 }
 
 /**
- * Triggered from the right-click item menu.
- * Finds the PDF attachment for the selected item, locates the open reader
- * for that attachment, and runs the hover-overlay preparation pipeline.
+ * Triggered from the right-click item menu OR the reader toolbar button.
+ *
+ * Strategy:
+ *  1. If a library item is selected and has an open reader, use that reader.
+ *  2. Otherwise fall back to the first open reader (covers the case where the
+ *     user clicks the toolbar button from inside the reader with no item
+ *     selected in the library pane).
  */
 async function runPrepareOverlayFromMenu(): Promise<void> {
-  const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
-  if (!selectedItems.length) {
-    showError(getString("error-no-item-selected"));
-    return;
-  }
-
-  const pdfItem = getPDFAttachment(selectedItems[0]);
-  if (!pdfItem) {
-    showError(getString("error-no-pdf"));
-    return;
-  }
-
-  // Find an open reader whose attachment matches the PDF item
   const readers = (Zotero.Reader as any)._readers as any[] | undefined;
   ztoolkit.log("open readers:", readers?.length, readers?.map((r: any) => r._item?.id));
 
-  const reader = readers?.find(
-    (r: any) => r._item?.id === pdfItem.id,
-  );
+  let reader: any = undefined;
+
+  // Try to match by the currently selected library item
+  // getActiveZoteroPane() may return null when the PDF reader tab is focused
+  const selectedItems = Zotero.getActiveZoteroPane()?.getSelectedItems() ?? [];
+  if (selectedItems.length) {
+    const pdfItem = getPDFAttachment(selectedItems[0]);
+    if (pdfItem) {
+      reader = readers?.find((r: any) => r._item?.id === pdfItem.id);
+    }
+  }
+
+  // Fall back to the first open reader (toolbar button case)
+  if (!reader) {
+    reader = readers?.[0];
+  }
 
   if (!reader) {
     showError(getString("error-reader-not-open"));

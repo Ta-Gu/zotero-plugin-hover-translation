@@ -89,6 +89,10 @@ export function injectPageOverlay(
           clearTimeout(hideTimer);
           hideTimer = null;
         }
+        // Deactivate any previously highlighted sentence first
+        overlay.querySelectorAll(`.${ZONE_ACTIVE_CLASS}`).forEach((z: Element) => {
+          (z as HTMLElement).classList.remove(ZONE_ACTIVE_CLASS);
+        });
         // Activate ALL zones belonging to this sentence at once
         overlay.querySelectorAll(`[data-si="${si}"]`).forEach((z: Element) => {
           (z as HTMLElement).classList.add(ZONE_ACTIVE_CLASS);
