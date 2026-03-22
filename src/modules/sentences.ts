@@ -261,6 +261,21 @@ function isLikelyHeadingLine(line: Line): boolean {
     !/[.!?:,;]$/.test(fullStr)
   ) return true;
 
+  // Footnote / endnote markers: "[1]", "[12]", "1.", "†", "‡", "§", "*"
+  if (/^(\[\d+\]|\d+\.|[†‡§∗*])/.test(firstStr)) return true;
+
+  // Reference list entries: "Smith, J. (2020)..." or "[1] Author..."
+  if (/^\[\d+\]\s/.test(firstStr)) return true;
+
+  // Author affiliation lines: short lines with mixed institutional keywords
+  if (
+    fullStr.length <= 80 &&
+    /University|Institute|Department|School|Laboratory|Lab|College|Center|Centre/i.test(fullStr)
+  ) return true;
+
+  // Email address lines (common in paper headers)
+  if (/\S+@\S+\.\S+/.test(fullStr)) return true;
+
   return false;
 }
 
@@ -346,7 +361,7 @@ function splitBlockIntoSentences(
   const results: SentenceInfo[] = [];
   for (const range of ranges) {
     const text = fullText.slice(range.start, range.end).trim();
-    if (text.length < 10) continue;
+    if (text.length < 3) continue;
 
     // Assign each token to this sentence using the token's midpoint character
     // position. This ensures every token belongs to exactly one sentence and

@@ -64,6 +64,16 @@ export function setCachedPage(
 }
 
 /**
+ * Remove all cached translations for all items.
+ */
+export function clearAllCache(): void {
+  for (const key of Object.keys(_store)) {
+    delete _store[key];
+  }
+  scheduleSave();
+}
+
+/**
  * Remove all cached translations for a given attachment item.
  */
 export function clearCacheForItem(itemId: number): void {

@@ -13,7 +13,7 @@ import {
 } from "./modules/pdfExtract";
 import { extractPageSentencesViaIframe, SentenceInfo } from "./modules/sentences";
 import { injectPageOverlay, clearAllOverlays } from "./modules/overlay";
-import { initCache, getCachedPage, setCachedPage } from "./modules/cache";
+import { initCache, getCachedPage, setCachedPage, clearAllCache } from "./modules/cache";
 
 async function onStartup() {
   await Promise.all([
@@ -45,21 +45,6 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   win.MozXULElement.insertFTLIfNeeded(
     `${addon.data.config.addonRef}-mainWindow.ftl`,
   );
-
-  // Register right-click menu items on library items
-  ztoolkit.Menu.register("item", {
-    tag: "menuitem",
-    id: `zotero-itemmenu-${config.addonRef}-translate`,
-    label: getString("menu-translate"),
-    commandListener: () => addon.hooks.onMenuEvent("translatePDF"),
-  });
-
-  ztoolkit.Menu.register("item", {
-    tag: "menuitem",
-    id: `zotero-itemmenu-${config.addonRef}-prepare`,
-    label: getString("menu-prepare"),
-    commandListener: () => addon.hooks.onMenuEvent("prepareOverlay"),
-  });
 
   // Add a chrome toolbar button to zotero-tabs-toolbar (the top bar with the
   // sync button). This lives entirely in the chrome document — no iframe
@@ -156,6 +141,14 @@ async function onPrefsEvent(
       setPref(pref, input.value);
     });
   }
+
+  const clearBtn = doc.getElementById(`zotero-prefpane-${addonRef}-clear-cache`);
+  const clearStatus = doc.getElementById(`zotero-prefpane-${addonRef}-clear-cache-status`);
+  clearBtn?.addEventListener("command", () => {
+    clearAllCache();
+    if (clearStatus) clearStatus.setAttribute("value", "Cache cleared.");
+    setTimeout(() => clearStatus?.setAttribute("value", ""), 3000);
+  });
 }
 
 function onShortcuts(_type: string) {}
