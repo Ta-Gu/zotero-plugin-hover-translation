@@ -61,6 +61,29 @@ The tooltip is fixed to the full sentence extent, so moving between lines of a l
 - Only the first open of each PDF incurs API calls. Translations are cached in `hover-translation-cache.json` in your Zotero data directory.
 - To clear the cache (e.g., to force re-translation with a different language), use the **Clear All Cache** button in the preferences pane.
 
+## Known Limitations
+
+This plugin is in early development. The following issues are known and being worked on:
+
+**Sentence highlighting accuracy**
+
+Highlight zones are computed from the PDF's raw text coordinates, not from the rendered visual layer. In practice this means:
+
+- Sentences spanning multiple lines may have highlight zones that are slightly misaligned with the visible text
+- Complex layouts — two-column papers, figures, tables, footnotes, equations — may cause sentences to be grouped incorrectly (e.g. a section heading merged with the first body sentence, or two sentences treated as one)
+- Mathematical notation and inline citations (`[21]`) can confuse the sentence boundary detector
+- Scanned PDFs (image-based, no native text layer) produce no text and cannot be translated
+
+**Language switching requires clearing the cache**
+
+Translations are cached after the first run. If you change the target language in settings, you must click **Clear All Cache** in the preferences pane before the new language takes effect.
+
+**Long documents take time on first run**
+
+All pages are processed sequentially on the first click. A 20-page paper with 30 sentences per page means roughly 600 API calls, which may take a minute or more depending on your provider.
+
+---
+
 ## Comparison with Similar Tools
 
 | | Hover Translation | Zotero PDF Translate | zotero-pdf2zh |
