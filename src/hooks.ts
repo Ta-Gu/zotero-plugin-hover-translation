@@ -295,10 +295,9 @@ async function runPrepareTranslations(reader: any): Promise<void> {
   // Clear any existing overlays before starting fresh
   clearAllOverlays(iframeWin);
 
-  // Only process the current page and the next 2 pages to control API costs.
-  // The user can trigger again after scrolling to process more pages.
-  const PAGES_PER_RUN = 3;
-  const pageOrder = buildPageOrder(currentPage - 1, totalPages).slice(0, PAGES_PER_RUN);
+  // Process all pages, starting from the currently visible one.
+  // Already-translated pages are loaded from cache and never hit the API again.
+  const pageOrder = buildPageOrder(currentPage - 1, totalPages);
 
   for (let i = 0; i < pageOrder.length; i++) {
     const pageIndex = pageOrder[i]; // 0-based

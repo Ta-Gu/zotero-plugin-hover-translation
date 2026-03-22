@@ -1,6 +1,9 @@
 # dot files
 .DS_Store
 
+# Developer notes (not for public repo)
+CLAUDE.md
+
 # Node.js
 node_modules
 pnpm-lock.yaml
