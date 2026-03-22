@@ -94,12 +94,23 @@ export function injectPageOverlay(
           (z as HTMLElement).classList.remove(ZONE_ACTIVE_CLASS);
         });
         // Activate ALL zones belonging to this sentence at once
-        overlay.querySelectorAll(`[data-si="${si}"]`).forEach((z: Element) => {
-          (z as HTMLElement).classList.add(ZONE_ACTIVE_CLASS);
-        });
-        const zoneRect = zone.getBoundingClientRect();
-        const pageRect = overlay.parentElement?.getBoundingClientRect() ?? zoneRect;
-        showTooltip(doc, translation, zoneRect, pageRect);
+        const allZones = Array.from(
+          overlay.querySelectorAll(`[data-si="${si}"]`),
+        ) as HTMLElement[];
+        allZones.forEach((z) => z.classList.add(ZONE_ACTIVE_CLASS));
+
+        // Anchor the tooltip to the union rect of ALL zones for this sentence
+        // so it stays fixed at the top (or bottom) of the sentence regardless
+        // of which line the mouse is currently on.
+        const zoneRects = allZones.map((z) => z.getBoundingClientRect());
+        const sentenceRect = {
+          top: Math.min(...zoneRects.map((r) => r.top)),
+          bottom: Math.max(...zoneRects.map((r) => r.bottom)),
+          left: Math.min(...zoneRects.map((r) => r.left)),
+          width: Math.max(...zoneRects.map((r) => r.right)) - Math.min(...zoneRects.map((r) => r.left)),
+        };
+        const pageRect = overlay.parentElement?.getBoundingClientRect() ?? zoneRects[0];
+        showTooltip(doc, translation, sentenceRect, pageRect);
       });
 
       zone.addEventListener("mouseleave", () => {
@@ -146,10 +157,17 @@ function ensureTooltip(doc: Document): HTMLElement {
   return tooltip;
 }
 
+interface SimpleRect {
+  top: number;
+  bottom: number;
+  left: number;
+  width: number;
+}
+
 function showTooltip(
   doc: Document,
   text: string,
-  zoneRect: DOMRect,
+  zoneRect: SimpleRect,
   pageRect: DOMRect,
 ): void {
   const tooltip = ensureTooltip(doc);

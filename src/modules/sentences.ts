@@ -173,7 +173,7 @@ function processProjectedItems(
  * Items whose midpoints are within Y_TOLERANCE pixels belong to the same line.
  */
 function groupIntoLines(items: ProjectedItem[]): Line[] {
-  const Y_TOLERANCE = 5; // viewport pixels
+  const Y_TOLERANCE = 8; // viewport pixels — generous enough to absorb superscripts/subscripts
   const lines: Line[] = [];
 
   for (const item of items) {
@@ -219,7 +219,7 @@ function groupIntoBlocks(lines: Line[]): Line[][] {
     const gap = curr.top - prev.bottom;
     const sizeRatio = Math.max(prevH, currH) / Math.min(prevH, currH);
     const splitOnHeading = isLikelyHeadingLine(curr) || isLikelyHeadingLine(prev);
-    if (gap > prevH * 1.5 || sizeRatio > 1.3 || splitOnHeading) {
+    if (gap > prevH * 1.5 || sizeRatio > 1.8 || splitOnHeading) {
       blocks.push(current);
       current = [curr];
     } else {
@@ -242,8 +242,9 @@ function isLikelyHeadingLine(line: Line): boolean {
   // "2.3 …", "2.3.1 …", "A.1 …"
   if (/^\d+\.\d+|^[A-Z]\.\d+/.test(firstStr)) return true;
 
-  // "3 Results", "1 Introduction"
-  if (/^\d+\s+[A-Z]/.test(firstStr)) return true;
+  // "3 Results", "1 Introduction" — check fullStr too, because the number and
+  // title are often separate PDF items (firstStr would just be "1" alone).
+  if (/^\d+\s+[A-Z]/.test(firstStr) || /^\d+\s+[A-Z]/.test(fullStr)) return true;
 
   // Roman numeral heading: "I. Intro", "II. Background"
   if (/^(?:I{1,3}|IV|V?I{0,3}|IX|X{1,2}I{0,3})\.\s+[A-Z]/i.test(firstStr)) return true;
@@ -253,19 +254,24 @@ function isLikelyHeadingLine(line: Line): boolean {
 
   // Short line (≤ 60 chars), starts uppercase, no trailing sentence punctuation,
   // and has very few items — characteristic of a heading in academic PDFs.
+  // Limit to ≤ 2 items to avoid false positives on sentence-starting fragments
+  // like "Recent work has achieved" (4 items) which visually start a new line
+  // in two-column layouts but are clearly not headings.
   if (
     fullStr.length > 0 &&
     fullStr.length <= 60 &&
-    line.items.length <= 4 &&
+    line.items.length <= 2 &&
     /^[A-Z]/.test(fullStr) &&
     !/[.!?:,;]$/.test(fullStr)
   ) return true;
 
-  // Footnote / endnote markers: "[1]", "[12]", "1.", "†", "‡", "§", "*"
-  if (/^(\[\d+\]|\d+\.|[†‡§∗*])/.test(firstStr)) return true;
+  // Footnote / endnote markers: "†", "‡", "§", "*"
+  // NOTE: do NOT match bare "[21]" or "1." — inline superscript citations look
+  // identical to footnote markers and would cause false block splits in the body.
+  if (/^[†‡§∗*]/.test(firstStr)) return true;
 
-  // Reference list entries: "Smith, J. (2020)..." or "[1] Author..."
-  if (/^\[\d+\]\s/.test(firstStr)) return true;
+  // Reference list entries: "[1] Author..." — require substantial content after bracket
+  if (/^\[\d+\]\s/.test(firstStr) && fullStr.length > 15) return true;
 
   // Author affiliation lines: short lines with mixed institutional keywords
   if (
@@ -310,9 +316,21 @@ function splitBlockIntoSentences(
   let charPos = 0;
 
   for (const line of block) {
-    for (const item of line.items) {
+    for (let j = 0; j < line.items.length; j++) {
+      const item = line.items[j];
       tokens.push({ str: item.str, item, start: charPos });
       charPos += item.str.length;
+
+      // Ensure consecutive items within the same line are separated by a space.
+      // Some PDFs omit the space character between items (e.g. "sequences." and
+      // "Aligning" as separate items with no whitespace), which would produce
+      // "sequences.Aligning" in fullText and prevent sentence boundary detection.
+      const nextItem = line.items[j + 1];
+      const cur = tokens[tokens.length - 1];
+      if (nextItem && !cur.str.endsWith(" ") && !nextItem.str.startsWith(" ")) {
+        tokens[tokens.length - 1] = { ...cur, str: cur.str + " " };
+        charPos += 1;
+      }
     }
     // Ensure words from adjacent lines don't run together
     const last = tokens[tokens.length - 1];
@@ -393,29 +411,30 @@ function computeLineRects(
   vpWidth: number,
   vpHeight: number,
 ): LineRect[] {
-  const Y_TOLERANCE = 10; // generous tolerance to handle baseline drift within a line
+  const Y_TOLERANCE = 5;
   const lines: ProjectedItem[][] = [];
-  const lineMidY: number[] = []; // running average midY per group
 
   for (const item of items) {
     const midY = (item.top + item.bottom) / 2;
+    // Find the best matching group: within Y_TOLERANCE of ANY item already in the group.
+    // This is more robust than comparing only against the first item (which misses items
+    // with slightly shifted baselines, e.g. inline citations) while still preventing
+    // adjacent lines from merging (which happens when Y_TOLERANCE is too large).
     let bestIdx = -1;
     let bestDist = Infinity;
-    for (let i = 0; i < lineMidY.length; i++) {
-      const dist = Math.abs(lineMidY[i] - midY);
-      if (dist <= Y_TOLERANCE && dist < bestDist) {
-        bestDist = dist;
-        bestIdx = i;
+    for (let i = 0; i < lines.length; i++) {
+      for (const li of lines[i]) {
+        const dist = Math.abs((li.top + li.bottom) / 2 - midY);
+        if (dist <= Y_TOLERANCE && dist < bestDist) {
+          bestDist = dist;
+          bestIdx = i;
+        }
       }
     }
     if (bestIdx >= 0) {
       lines[bestIdx].push(item);
-      // Update running average midY so the group center tracks all items
-      const grp = lines[bestIdx];
-      lineMidY[bestIdx] = grp.reduce((s, it) => s + (it.top + it.bottom) / 2, 0) / grp.length;
     } else {
       lines.push([item]);
-      lineMidY.push(midY);
     }
   }
 
