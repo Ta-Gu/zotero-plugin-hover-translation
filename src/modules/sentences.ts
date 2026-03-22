@@ -393,19 +393,29 @@ function computeLineRects(
   vpWidth: number,
   vpHeight: number,
 ): LineRect[] {
-  const Y_TOLERANCE = 5;
+  const Y_TOLERANCE = 10; // generous tolerance to handle baseline drift within a line
   const lines: ProjectedItem[][] = [];
+  const lineMidY: number[] = []; // running average midY per group
 
   for (const item of items) {
     const midY = (item.top + item.bottom) / 2;
-    const existing = lines.find((lineItems) => {
-      const firstMidY = (lineItems[0].top + lineItems[0].bottom) / 2;
-      return Math.abs(firstMidY - midY) <= Y_TOLERANCE;
-    });
-    if (existing) {
-      existing.push(item);
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < lineMidY.length; i++) {
+      const dist = Math.abs(lineMidY[i] - midY);
+      if (dist <= Y_TOLERANCE && dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx >= 0) {
+      lines[bestIdx].push(item);
+      // Update running average midY so the group center tracks all items
+      const grp = lines[bestIdx];
+      lineMidY[bestIdx] = grp.reduce((s, it) => s + (it.top + it.bottom) / 2, 0) / grp.length;
     } else {
       lines.push([item]);
+      lineMidY.push(midY);
     }
   }
 

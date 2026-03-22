@@ -216,7 +216,7 @@ function ensureGlobalStyles(doc: Document): void {
       transition: background 0.1s;
     }
     .${ZONE_ACTIVE_CLASS} {
-      background: rgba(100, 160, 255, 0.35);
+      background: rgba(255, 210, 0, 0.4);
     }
     #${TOOLTIP_ID} {
       position: fixed;
